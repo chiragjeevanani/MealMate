@@ -6,10 +6,10 @@ export const About: React.FC = () => {
       <h1 className="text-4xl font-extrabold text-center mb-6 text-emerald-700 dark:text-emerald-400">About MealMate</h1>
       <div className="space-y-4 text-gray-700 dark:text-gray-300 leading-relaxed">
         <p>
-          Welcome to MealMate, your modern guide to making delicious meals at home. We believe that cooking should be an enjoyable and stress-free experience for everyone, from seasoned chefs to complete beginners.
+          Welcome to MealMate, your modern guide to making delicious meals at home. I believe that cooking should be an enjoyable and stress-free experience for everyone, from seasoned chefs to complete beginners.
         </p>
         <p>
-          Our app is designed to help you succeed in the kitchen with a curated library of recipes, detailed step-by-step instructions, and our unique cook-along feature.
+          My app is designed to help you succeed in the kitchen with a curated library of recipes, detailed step-by-step instructions, and our unique cook-along feature.
         </p>
         <h2 className="text-2xl font-bold pt-4 text-gray-800 dark:text-gray-100">Our Features</h2>
         <ul className="list-disc list-inside space-y-2">
@@ -21,8 +21,9 @@ export const About: React.FC = () => {
           <li><strong>Responsive Design:</strong> Cook from any device—desktop, tablet, or mobile. Our app is designed to look and work great everywhere.</li>
         </ul>
         <p>
-          Our mission is to empower you with the tools and confidence to create amazing food. So grab your apron, and let's get cooking!
+          My mission is to empower you with the tools and confidence to create amazing food. So grab your apron, and let's get cooking!
         </p>
+        <h6 className="text-2xl font-extrabold text-center mb-6 text-emerald-700 dark:text-emerald-400">By- Chirag Jeevanani</h6>
       </div>
     </div>
   );

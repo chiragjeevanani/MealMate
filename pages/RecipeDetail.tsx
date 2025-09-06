@@ -3,16 +3,21 @@ import { useParams, useLocation, Link } from 'react-router-dom';
 import { recipes as staticRecipes } from '../data/recipes';
 import { Recipe, Step } from '../types';
 import { useFavorites } from '../contexts/FavoritesContext';
-import { getChefsTip, getIngredientSubstitute, updateRecipeWithIngredients, translateRecipe, generateImageForRecipe } from '../services/geminiService';
+import { getChefsTip, getIngredientSubstitute, updateRecipeWithIngredients, translateRecipe, generateImageForRecipe, updateRecipeForCooktop } from '../services/geminiService';
 import { 
   HeartIcon, ClockIcon, TimerIcon, PlayIcon, PauseIcon, ResetIcon, 
   ChevronUpIcon, ChevronDownIcon, LightbulbIcon, ReplaceIcon, XIcon, MagicWandIcon,
-  LanguageIcon, SpinnerIcon
+  LanguageIcon, SpinnerIcon, CooktopIcon,
 } from '../components/icons/Icons';
 
 const StepTimer: React.FC<{ step: Step, onComplete: () => void }> = ({ step, onComplete }) => {
   const [timeLeft, setTimeLeft] = useState(step.time);
   const [isActive, setIsActive] = useState(false);
+  const onCompleteRef = useRef(onComplete);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     setTimeLeft(step.time);
@@ -27,12 +32,12 @@ const StepTimer: React.FC<{ step: Step, onComplete: () => void }> = ({ step, onC
       }, 1000);
     } else if (timeLeft === 0 && isActive) {
       setIsActive(false);
-      onComplete();
+      onCompleteRef.current();
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isActive, timeLeft, onComplete]);
+  }, [isActive, timeLeft]);
 
   const toggleTimer = () => setIsActive(!isActive);
   const resetTimer = () => {
@@ -109,8 +114,10 @@ export const RecipeDetail: React.FC = () => {
   const location = useLocation();
   const stateRecipe = location.state?.recipe as Recipe | undefined;
   const langDropdownRef = useRef<HTMLDivElement>(null);
+  const cooktopDropdownRef = useRef<HTMLDivElement>(null);
 
   const [activeStep, setActiveStep] = useState<number | null>(0);
+  const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [checkedIngredients, setCheckedIngredients] = useState<Record<string, boolean>>({});
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [substituteIngredient, setSubstituteIngredient] = useState<string | null>(null);
@@ -133,6 +140,17 @@ export const RecipeDetail: React.FC = () => {
   // Image Generation State
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [imageGenerationError, setImageGenerationError] = useState<string | null>(null);
+  
+  // Cooktop State
+  const [cooktop, setCooktop] = useState<'LPG Cooktop' | 'Induction Cooktop' | 'Simple Electric Kettle'>('LPG Cooktop');
+  const [isCooktopDropdownOpen, setIsCooktopDropdownOpen] = useState(false);
+  const [isUpdatingCooktop, setIsUpdatingCooktop] = useState(false);
+  const [cooktopUpdateError, setCooktopUpdateError] = useState<string | null>(null);
+  const [isCooktopModified, setIsCooktopModified] = useState(false);
+  const [stepsBeforeCooktopMod, setStepsBeforeCooktopMod] = useState<Step[] | null>(null);
+
+  // Timer End Popup State
+  const [isTimerEndPopupVisible, setIsTimerEndPopupVisible] = useState(false);
 
 
   const recipe = useMemo(() => { // This is the original, unmodified recipe
@@ -151,6 +169,7 @@ export const RecipeDetail: React.FC = () => {
         return acc;
       }, {} as Record<string, boolean>);
       setCheckedIngredients(initialCheckedState);
+      setCompletedSteps(new Set());
     }
   }, [recipe]);
   
@@ -158,6 +177,9 @@ export const RecipeDetail: React.FC = () => {
     const handleClickOutside = (event: MouseEvent) => {
       if (langDropdownRef.current && !langDropdownRef.current.contains(event.target as Node)) {
         setIsLangDropdownOpen(false);
+      }
+      if (cooktopDropdownRef.current && !cooktopDropdownRef.current.contains(event.target as Node)) {
+        setIsCooktopDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -200,11 +222,61 @@ export const RecipeDetail: React.FC = () => {
     }
   };
 
+  const handleCooktopChange = async (newCooktop: 'LPG Cooktop' | 'Induction Cooktop' | 'Simple Electric Kettle') => {
+    setIsCooktopDropdownOpen(false);
+    if (newCooktop === cooktop || !currentRecipe) return;
+
+    setCompletedSteps(new Set()); // Reset completion on change
+
+    if (newCooktop === 'LPG Cooktop') {
+        if (stepsBeforeCooktopMod) {
+            setCurrentRecipe(prev => prev ? { ...prev, steps: stepsBeforeCooktopMod } : null);
+        }
+        setIsCooktopModified(false);
+        setStepsBeforeCooktopMod(null);
+        setCooktop('LPG Cooktop');
+        setCooktopUpdateError(null);
+        return;
+    }
+
+    const previousCooktop = cooktop;
+    setCooktop(newCooktop);
+    setIsUpdatingCooktop(true);
+    setCooktopUpdateError(null);
+    
+    try {
+        const baseRecipeForMod = { ...currentRecipe };
+        if (stepsBeforeCooktopMod) {
+            baseRecipeForMod.steps = stepsBeforeCooktopMod;
+        }
+
+        if (!isCooktopModified) {
+            setStepsBeforeCooktopMod(currentRecipe.steps);
+        }
+        
+        const result = await updateRecipeForCooktop(baseRecipeForMod, newCooktop);
+
+        if (result) {
+            setCurrentRecipe(prev => prev ? { ...prev, steps: result.steps } : null);
+            setIsCooktopModified(true);
+        } else {
+            setCooktopUpdateError(`Sorry, the AI couldn't adapt the recipe. Please try again.`);
+            setCooktop(previousCooktop); // Revert selection on failure
+        }
+    } catch (err) {
+        setCooktopUpdateError("An error occurred during adaptation. Please try again.");
+        setCooktop(previousCooktop); // Revert selection on failure
+    } finally {
+        setIsUpdatingCooktop(false);
+    }
+  };
+
   const handleUpdateRecipe = async () => {
     if (!currentRecipe) return;
 
     setIsUpdatingRecipe(true);
     setRecipeUpdateError(null);
+    setCompletedSteps(new Set()); // Reset completion on change
 
     const availableIngredients = Object.entries(checkedIngredients)
       .filter(([, isChecked]) => isChecked)
@@ -235,9 +307,14 @@ export const RecipeDetail: React.FC = () => {
     if (recipe) {
       setCurrentRecipe(recipe);
       setIsRecipeModified(false);
-       setLanguage('English');
+      setLanguage('English');
       setTranslation(null);
       setTranslationError(null);
+      setCooktop('LPG Cooktop');
+      setIsCooktopModified(false);
+      setStepsBeforeCooktopMod(null);
+      setCooktopUpdateError(null);
+      setCompletedSteps(new Set());
       const initialCheckedState = recipe.ingredients.reduce((acc, ing) => {
         acc[ing] = true;
         return acc;
@@ -297,13 +374,35 @@ export const RecipeDetail: React.FC = () => {
     setActiveStep(activeStep === index ? null : index);
   };
   
-  const handleTimerComplete = () => {
+  const handleStepCompletionToggle = (index: number) => {
+    setCompletedSteps(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(index)) {
+        newSet.delete(index);
+      } else {
+        newSet.add(index);
+      }
+      return newSet;
+    });
+  };
+
+  const handleTimerFinish = () => {
+    // Show popup only if there is a next step
     if(activeStep !== null && activeStep < currentRecipe.steps.length - 1) {
-        setActiveStep(activeStep + 1);
-    } else {
-        setActiveStep(null);
+        setIsTimerEndPopupVisible(true);
     }
   };
+  
+  const handleGoToNextStep = () => {
+    if (activeStep !== null && activeStep < currentRecipe.steps.length - 1) {
+      // Mark current step as complete
+      setCompletedSteps(prev => new Set(prev).add(activeStep));
+      // Move to next step
+      setActiveStep(activeStep + 1);
+    }
+    setIsTimerEndPopupVisible(false);
+  };
+
 
   const handleCheckChange = (ingredient: string) => {
     setCheckedIngredients(prev => ({ ...prev, [ingredient]: !prev[ingredient] }));
@@ -386,6 +485,26 @@ export const RecipeDetail: React.FC = () => {
                   {isGeneratingImage ? <SpinnerIcon className="h-7 w-7" /> : <MagicWandIcon className="h-7 w-7" />}
                 </button>
               )}
+               <div className="relative" ref={cooktopDropdownRef}>
+                <button
+                  onClick={() => setIsCooktopDropdownOpen(!isCooktopDropdownOpen)}
+                  disabled={isUpdatingCooktop}
+                  className="bg-white/80 dark:bg-gray-900/80 rounded-full p-3 text-gray-600 dark:text-gray-300 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors shadow-md disabled:opacity-50"
+                  aria-label="Select cooktop"
+                  title="Select cooktop"
+                >
+                  {isUpdatingCooktop ? <SpinnerIcon className="h-7 w-7" /> : <CooktopIcon className="h-7 w-7" />}
+                </button>
+                {isCooktopDropdownOpen && (
+                  <div className="absolute right-0 mt-2 w-48 origin-top-right bg-white dark:bg-gray-800 rounded-md shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none animate-fade-in">
+                    <div className="py-1">
+                      <button onClick={() => handleCooktopChange('LPG Cooktop')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">LPG Cooktop</button>
+                      <button onClick={() => handleCooktopChange('Induction Cooktop')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Induction Cooktop</button>
+                      <button onClick={() => handleCooktopChange('Simple Electric Kettle')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Simple Electric Kettle</button>
+                    </div>
+                  </div>
+                )}
+              </div>
               <div className="relative" ref={langDropdownRef}>
                 <button
                   onClick={() => setIsLangDropdownOpen(!isLangDropdownOpen)}
@@ -426,6 +545,13 @@ export const RecipeDetail: React.FC = () => {
             <div className="mt-4 p-3 bg-red-50 dark:bg-gray-700 border-l-4 border-red-400 dark:border-red-600 text-red-800 dark:text-red-200 rounded-r-lg animate-fade-in">
               <p className="font-bold text-sm">Image Generation Error:</p>
               <p className="text-sm">{imageGenerationError}</p>
+            </div>
+          )}
+
+          {cooktopUpdateError && (
+            <div className="mt-4 p-3 bg-red-50 dark:bg-gray-700 border-l-4 border-red-400 dark:border-red-600 text-red-800 dark:text-red-200 rounded-r-lg animate-fade-in">
+              <p className="font-bold text-sm">Cooktop Adaptation Error:</p>
+              <p className="text-sm">{cooktopUpdateError}</p>
             </div>
           )}
 
@@ -500,7 +626,7 @@ export const RecipeDetail: React.FC = () => {
             <div className="md:col-span-2">
                <div className="flex justify-between items-center mb-4">
                   <h2 className="text-2xl font-bold border-b-2 border-emerald-200 dark:border-emerald-800 pb-2 flex-grow">Instructions</h2>
-                  {isRecipeModified && (
+                  {(isRecipeModified || isCooktopModified) && (
                     <button onClick={handleResetRecipe} className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 font-semibold ml-4 flex-shrink-0">
                       <ResetIcon className="h-4 w-4" />
                       Reset to Original
@@ -514,9 +640,16 @@ export const RecipeDetail: React.FC = () => {
                     <p className="text-sm">The instructions have been adjusted for your available ingredients.</p>
                   </div>
                 )}
+                {isCooktopModified && (
+                  <div className="p-3 mb-4 bg-blue-50 dark:bg-gray-700 border-l-4 border-blue-400 dark:border-blue-600 text-blue-800 dark:text-blue-200 rounded-r-lg animate-fade-in">
+                    <p className="font-bold text-sm">Recipe Adapted!</p>
+                    <p className="text-sm">The instructions have been adjusted for your <strong>{cooktop}</strong>.</p>
+                  </div>
+                )}
 
               <div className="space-y-4">
                 {currentRecipe.steps.map((step, index) => {
+                  const isCompleted = completedSteps.has(index);
                   const displayStepDescription = (language !== 'English' && translation?.steps?.[index]) 
                     ? translation.steps[index].description 
                     : step.description;
@@ -525,19 +658,31 @@ export const RecipeDetail: React.FC = () => {
                     : currentRecipe.name;
                   
                   return (
-                    <div key={index} className="border dark:border-gray-700 rounded-lg overflow-hidden">
-                      <button
+                    <div key={index} className={`border dark:border-gray-700 rounded-lg overflow-hidden transition-colors ${isCompleted ? 'bg-green-50/50 dark:bg-gray-800' : 'bg-white dark:bg-gray-800'}`}>
+                      <div
                         onClick={() => toggleStep(index)}
-                        className="w-full flex justify-between items-center p-4 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                        className="w-full flex justify-between items-center p-4 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors cursor-pointer"
                       >
-                        <span className="font-bold text-lg text-left">Step {index + 1}</span>
+                         <div className="flex items-center">
+                            <input
+                              type="checkbox"
+                              id={`step-checkbox-${index}`}
+                              checked={isCompleted}
+                              onChange={() => handleStepCompletionToggle(index)}
+                              onClick={(e) => e.stopPropagation()} // Prevent accordion from toggling when clicking checkbox
+                              className="h-6 w-6 rounded border-gray-400 dark:border-gray-500 text-emerald-600 focus:ring-emerald-500 bg-transparent dark:bg-gray-800"
+                            />
+                            <span className={`font-bold text-lg text-left ml-4 ${isCompleted ? 'line-through text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>
+                              Step {index + 1}
+                            </span>
+                          </div>
                         {activeStep === index ? <ChevronUpIcon className="h-6 w-6"/> : <ChevronDownIcon className="h-6 w-6"/>}
-                      </button>
+                      </div>
                       {activeStep === index && (
                         <div className="p-4 bg-white dark:bg-gray-800 animate-fade-in">
                           <p className="text-gray-700 dark:text-gray-300">{displayStepDescription}</p>
                           {step.time > 0 && (
-                            <StepTimer step={step} onComplete={handleTimerComplete} />
+                            <StepTimer step={step} onComplete={handleTimerFinish} />
                           )}
                           <ChefTip recipeName={displayRecipeName} stepDescription={displayStepDescription} />
                         </div>
@@ -575,6 +720,33 @@ export const RecipeDetail: React.FC = () => {
                     </button>
                 </>
             )}
+          </div>
+        </div>
+      )}
+      {isTimerEndPopupVisible && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-8 w-full max-w-sm text-center relative animate-slide-in-up">
+              <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900">
+                  <svg className="h-6 w-6 text-green-600 dark:text-green-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                  </svg>
+              </div>
+              <h3 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mt-4">Time's up!</h3>
+              <p className="text-gray-600 dark:text-gray-300 mt-2">Ready for the next step?</p>
+              <div className="mt-6 flex flex-col sm:flex-row gap-3">
+                   <button
+                      onClick={() => setIsTimerEndPopupVisible(false)}
+                      className="w-full px-4 py-2 bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 font-semibold rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500 transition"
+                  >
+                      Stay Here
+                  </button>
+                  <button
+                      onClick={handleGoToNextStep}
+                      className="w-full px-4 py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition"
+                  >
+                      Go to Next Step
+                  </button>
+              </div>
           </div>
         </div>
       )}

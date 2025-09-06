@@ -98,6 +98,25 @@ const translatedRecipeSchema = {
   required: ["name", "description", "ingredients", "steps"]
 };
 
+const cooktopAdjustedRecipeSchema = {
+  type: Type.OBJECT,
+  properties: {
+    steps: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          description: { type: Type.STRING, description: "A single step in the updated cooking instructions." },
+          time: { type: Type.INTEGER, description: "Estimated time for this step in SECONDS. The original time value should be preserved." }
+        },
+        required: ["description", "time"]
+      },
+      description: "The updated step-by-step instructions for preparing the dish on the specified cooktop."
+    }
+  },
+  required: ["steps"]
+};
+
 // A utility to parse the AI response
 const parseAiResponse = (responseText: string): Omit<Recipe, 'id' | 'imageUrl' | 'isGenerated'> | null => {
   try {
@@ -200,6 +219,47 @@ export const generateRecipe = async (searchTerm: string): Promise<Recipe | null>
 export const generateRecipeFromIngredients = async (ingredients: string[]): Promise<Recipe | null> => {
   const prompt = `Generate a creative recipe that primarily uses the following ingredients: ${ingredients.join(', ')}. It's okay to add a few common pantry staples. Provide all the details needed to be displayed in a recipe app.`;
   return callGemini(prompt, false); // Always generate without an image initially
+};
+
+export const generateRecipesFromSearch = async (searchTerm: string): Promise<Recipe[] | null> => {
+  const prompt = `Generate a list of 5 diverse and creative recipes related to "${searchTerm}". For example, if the search is 'chicken curry', suggest different regional varieties or styles of chicken curry. The recipes should be suitable for a home cook and include all necessary fields: name, description, category, prepTime, cookTime, servings, ingredients, and steps with timings.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: recipesArraySchema
+      }
+    });
+
+    const text = response.text;
+    if (!text) {
+      console.error("No text in Gemini response for search recipes");
+      return null;
+    }
+    
+    const cleanJsonString = text.trim().replace(/^```json/, '').replace(/```$/, '');
+    const recipeDataArray = JSON.parse(cleanJsonString);
+
+    if (Array.isArray(recipeDataArray)) {
+      return recipeDataArray.map((recipeData: Omit<Recipe, 'id' | 'imageUrl' | 'isGenerated'>) => {
+        const id = `generated-${recipeData.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+        return {
+          ...recipeData,
+          id,
+          imageUrl: '', // Always generate without an image initially
+          isGenerated: true,
+        };
+      });
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`Error generating recipes for search term ${searchTerm}:`, error);
+    return null;
+  }
 };
 
 export const generateRecipesForCategory = async (category: string): Promise<Recipe[] | null> => {
@@ -388,6 +448,55 @@ ${JSON.stringify(translatableContent, null, 2)}`;
   } catch (error)
  {
     console.error(`Error translating recipe to ${language}:`, error);
+    return null;
+  }
+};
+
+export const updateRecipeForCooktop = async (
+  recipe: Recipe,
+  cooktop: 'Induction Cooktop' | 'Simple Electric Kettle'
+): Promise<{ steps: Step[] } | null> => {
+  let specificInstructions = '';
+
+  if (cooktop === 'Induction Cooktop') {
+    specificInstructions = `Adjust instructions about heat levels and cooking methods. For any instruction about flame or heat level (e.g., 'medium flame', 'low heat'), you MUST replace it with a specific temperature in Celsius AND a power setting in watts, appropriate for a standard home induction cooktop. The format MUST be 'TEMPERATURE°C / POWERW' (e.g., '120°C / 1000W').`;
+  } else { // Simple Electric Kettle
+    specificInstructions = `Adjust the instructions to be achievable using only a simple electric kettle. Focus on steps involving boiling water, steeping, or creating hot water baths. If a step cannot be done with a kettle, modify it to the closest possible alternative.`;
+  }
+
+  const prompt = `I am making a recipe called "${recipe.name}".
+The original instructions are: ${recipe.steps.map((s, i) => `${i + 1}. ${s.description}`).join(' ')}.
+
+Please modify these instructions to be suitable for cooking on a '${cooktop}'.
+${specificInstructions}
+Return ONLY the modified steps array in the specified JSON format. Keep the JSON structure and preserve the original 'time' values for each step. Do not add any extra commentary.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: cooktopAdjustedRecipeSchema
+      }
+    });
+
+    const text = response.text;
+    if (!text) {
+      console.error("No text in Gemini response for cooktop update");
+      return null;
+    }
+    
+    const cleanJsonString = text.trim().replace(/^```json/, '').replace(/```$/, '');
+    const updatedData = JSON.parse(cleanJsonString);
+
+    if (updatedData && Array.isArray(updatedData.steps)) {
+      return updatedData;
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`Error updating recipe for ${cooktop}:`, error);
     return null;
   }
 };

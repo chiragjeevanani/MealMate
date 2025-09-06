@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Recipe } from '../types';
 import { RecipeCard } from '../components/RecipeCard';
-import { generateRecipe, generateRecipeFromIngredients, generateRecipesForCategory } from '../services/geminiService';
+import { generateRecipeFromIngredients, generateRecipesForCategory, generateRecipesFromSearch } from '../services/geminiService';
 
 const CATEGORIES = ['Vegetarian', 'Quick Meals', 'Desserts', 'Chicken', 'Seafood', 'Pasta'];
 
@@ -16,6 +16,7 @@ export const Categories: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pageTitle, setPageTitle] = useState('Explore Recipes');
+  const [sortBy, setSortBy] = useState('relevance');
 
   // Effect to handle search/ingredient-based generation from URL params
   useEffect(() => {
@@ -28,6 +29,7 @@ export const Categories: React.FC = () => {
       setError(null);
       setSelectedCategory(null);
       setDisplayedRecipes([]);
+      setSortBy('relevance');
 
       if (ingredientsQuery) {
         setPageTitle(`Generating ideas for your ingredients...`);
@@ -41,13 +43,14 @@ export const Categories: React.FC = () => {
         }
 
       } else if (searchQuery) {
-        setPageTitle(`Generating a recipe for "${searchQuery}"...`);
-        const generatedData = await generateRecipe(searchQuery);
-         if (generatedData) {
-            navigate(`/recipe/${generatedData.id}`, { state: { recipe: generatedData } });
-            return; // Exit early
+        setPageTitle(`Generating recipes for "${searchQuery}"...`);
+        const recipes = await generateRecipesFromSearch(searchQuery);
+        if (recipes && recipes.length > 0) {
+            setDisplayedRecipes(recipes);
+            setPageTitle(`Showing results for "${searchQuery}"`);
         } else {
-             setError(`Sorry, we couldn't generate a recipe for "${searchQuery}".`);
+             setError(`Sorry, we couldn't find any recipes for "${searchQuery}".`);
+             setPageTitle(`No results for "${searchQuery}"`);
         }
       }
       setIsLoading(false);
@@ -75,6 +78,7 @@ export const Categories: React.FC = () => {
     setIsLoading(true);
     setError(null);
     setDisplayedRecipes([]);
+    setSortBy('relevance');
     setPageTitle(`AI-Generated Ideas for ${category}`);
 
     try {
@@ -91,6 +95,21 @@ export const Categories: React.FC = () => {
       setIsLoading(false);
     }
   };
+
+  const sortedRecipes = useMemo(() => {
+    const sortableRecipes = [...displayedRecipes];
+    switch (sortBy) {
+      case 'prepTime':
+        return sortableRecipes.sort((a, b) => a.prepTime - b.prepTime);
+      case 'cookTime':
+        return sortableRecipes.sort((a, b) => a.cookTime - b.cookTime);
+      case 'totalTime':
+        return sortableRecipes.sort((a, b) => (a.prepTime + a.cookTime) - (b.prepTime + b.cookTime));
+      case 'relevance':
+      default:
+        return displayedRecipes;
+    }
+  }, [displayedRecipes, sortBy]);
 
   return (
     <div className="animate-fade-in">
@@ -150,10 +169,24 @@ export const Categories: React.FC = () => {
         )}
 
         {!isLoading && displayedRecipes.length > 0 && (
-          <div className="space-y-12">
+          <div className="space-y-8">
+            <div className="flex justify-end items-center">
+                <label htmlFor="sort-by" className="text-sm font-medium text-gray-700 dark:text-gray-300 mr-2">Sort by:</label>
+                <select
+                  id="sort-by"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition bg-white dark:bg-gray-700 text-sm"
+                >
+                  <option value="relevance">Relevance</option>
+                  <option value="prepTime">Prep Time (Quickest)</option>
+                  <option value="cookTime">Cook Time (Quickest)</option>
+                  <option value="totalTime">Total Time (Quickest)</option>
+                </select>
+            </div>
             <section>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {displayedRecipes.map(recipe => (
+                {sortedRecipes.map(recipe => (
                   <RecipeCard key={recipe.id} recipe={recipe} />
                 ))}
               </div>

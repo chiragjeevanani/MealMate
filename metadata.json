@@ -1,0 +1,5 @@
+{
+  "name": "MealMate",
+  "description": "A modern, vibrant app that helps users cook step-by-step with cook-along timers and progress checkpoints. Find recipes, follow along with interactive instructions, and get helpful tips from an AI chef.",
+  "requestFramePermissions": []
+}
